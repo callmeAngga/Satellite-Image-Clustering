@@ -43,7 +43,7 @@ def is_water(rgb_color):
 def main():
     # Atur pengaturan halaman aplikasi
     st.set_page_config(
-        page_title="Cuty Area Segmentation",        # Set judul aplikasi
+        page_title="City Area Segmentation",        # Set judul aplikasi
         layout="wide"                               # Atur tata letak halamana menjadi lebar
     )    
     

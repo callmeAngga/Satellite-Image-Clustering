@@ -1,149 +1,202 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
+import os
+import cv2
 from src.kmeans import KMeans
 from src.preprocessing import preprocess_image, extract_features, clean_small_regions
 from src.visualization import visualize_results, visualize_cluster_info
-import cv2
+from src.evaluation import evaluate_clustering
 
-# Fungsi untuk memeriksa apakah warna adalah hijau
+# Fungsi untuk memeriksa apakah sebuah warna termasuk hijau
 def is_green(rgb_color):
-    # Konversi warna RGB ke format HSV untuk pemeriksaan warna
     hsv_color = cv2.cvtColor(np.uint8([[rgb_color]]), cv2.COLOR_RGB2HSV)[0][0]
-    
-    # Definisikan rentang warna hijau dalam format HSV
-    lower_green = np.array([30, 50, 50]) 
+    lower_green = np.array([30, 50, 50])
     upper_green = np.array([90, 255, 255])
-    
-    # Kembalikan True jika warna berada dalam rentang hijau
     return np.all(lower_green <= hsv_color) and np.all(hsv_color <= upper_green)
 
-# Fungsi untuk memeriksa apakah warna RGB adalah hijau gelap
+# Fungsi untuk memeriksa apakah sebuah warna termasuk hijau gelap
 def is_dark_green(rgb_color):
-    r, g, b = rgb_color
-    return g > r and g > b and g > 50 and g < 100
+    hsv_color = cv2.cvtColor(np.uint8([[rgb_color]]), cv2.COLOR_RGB2HSV)[0][0]
+    return hsv_color[0] > 60 and hsv_color[1] > 40 and hsv_color[2] < 100
 
-# Fungsi untuk memeriksa apakah warna RGB adalah warna bangunan
+# Fungsi untuk memeriksa apakah sebuah warna termasuk warna bangunan
 def is_building(rgb_color):
     r, g, b = rgb_color
-
-    # Periksa kondisi spesifik untuk warna bangunan
     return (
-        (r > 150 and g > 120 and b > 100) or  # Warna bangunan terang
-        (r == 208 and g == 143 and b == 118) or  # Warna spesifik genteng Indonesia (orange)
-        (r == 179 and g == 175 and b == 166)  # Warna spesifik abu-abu bangunan
+        (r > 150 and g > 120 and b > 100) or
+        (r == 208 and g == 143 and b == 118) or
+        (r == 179 and g == 175 and b == 166)
     )
-    
-# Fungsi untuk memeriksa apakah warna RGB adalah warna air
-def is_water(rgb_color):
-    r, g, b = rgb_color
-    return (r < 120 and g < 120 and b < 120) or (r == 99 and g == 111 and b == 92)
 
-# Fungsi utama untuk menjalankan aplikasi Streamlit
+# Fungsi untuk mengubah label klaster menjadi gambar RGB
+def labels_to_rgb(labels, centroids):
+    height, width = labels.shape
+    rgb_image = np.zeros((height, width, 3), dtype=np.uint8)
+
+    # Pastikan centroid memiliki 3 saluran (RGB)
+    if centroids.shape[1] == 1:  # Jika centroid grayscale
+        centroids = np.repeat(centroids, 3, axis=1)  # Ubah menjadi RGB dengan mengulang
+
+    # Tetapkan warna centroid ke masing-masing label klaster
+    for k in range(centroids.shape[0]):
+        rgb_image[labels == k] = centroids[k, :3]  # Tetapkan warna centroid ke setiap label (RGB)
+
+    return rgb_image
+
+# Fungsi untuk melatih model KMeans dengan gambar yang diunggah
+def train_model(n_clusters, uploaded_images):
+    st.write("Training KMeans model...")
+
+    if not uploaded_images:
+        st.error("No images uploaded for training!")
+        return None
+
+    # Memuat dan memproses gambar latih dari input pengguna
+    train_images = []
+    for uploaded_image in uploaded_images:
+        img = Image.open(uploaded_image)
+        train_images.append(np.array(img))
+
+    # Ekstraksi fitur dari semua gambar latih
+    all_features = []
+    for i, img in enumerate(train_images):
+        st.write(f"Processing training image {i+1}/{len(train_images)}...")
+        preprocessed = preprocess_image(img)
+        features = extract_features(preprocessed)
+        all_features.append(features)
+
+        # Melatih model KMeans pada fitur gambar ini
+        if len(features) > 0:
+            kmeans = KMeans(n_clusters=n_clusters)
+            kmeans.fit(features)
+
+            # Lakukan segmentasi
+            segmented_image = kmeans.predict(features).reshape(img.shape[:2])
+            cleaned_image = clean_small_regions(segmented_image, min_size=100)  # Membersihkan area kecil
+
+            # Visualisasi hasil segmentasi untuk setiap gambar latih
+            fig, avg_colors = visualize_results(img, cleaned_image)
+            st.pyplot(fig)  # Tampilkan hasil visualisasi
+            
+    # Gabungkan semua fitur dari gambar latih
+    combined_features = np.vstack(all_features)
+
+    # Melatih model KMeans pada fitur gabungan
+    kmeans = KMeans(n_clusters=n_clusters)
+    kmeans.fit(combined_features)
+
+    # Simpan model yang dilatih
+    kmeans.save_model('models/kmeans_model.pkl')
+    st.write("Model training completed and saved.")
+
+    return kmeans
+
+# Fungsi utama aplikasi
 def main():
-    # Atur pengaturan halaman aplikasi
-    st.set_page_config(
-        page_title="Cuty Area Segmentation",        # Set judul aplikasi
-        layout="wide"                               # Atur tata letak halamana menjadi lebar
-    )    
-    
-    # Tampilkan judul dan penjelasan aplikasi
+    st.set_page_config(page_title="City Area Segmentation", layout="wide")
+
     st.title('Image Segmentation with K-Means Clustering')
-    st.markdown("""
-    This project determines whether an area is liveable based on two criteria:
-    1. Green area > 30% of the total area, or
-    2. Green area > Building area
+    
+    # Dropdown untuk memilih mode klasterisasi
+    option = st.selectbox("Select Clustering Mode", ["Clustering Biasa", "Clustering Kelayakan Huni Suatu Area"])
 
-    **Note:** This program requires input images from aerial/satellite/UAV imagery.
-    """)
-    st.markdown("---")
-
-    # Buat dua kolom untuk antarmuka pengguna
     col1, col2 = st.columns([1, 2])
 
     with col1:
-        st.subheader("Upload Image")
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        st.subheader("Train Clustering Model")
         n_clusters = st.slider('Number of clusters', min_value=2, max_value=10, value=4)
 
-        # Jika file diunggah, tampilkan gambar
+        # Berikan info berbeda berdasarkan mode klasterisasi
+        if option == "Clustering Kelayakan Huni Suatu Area":
+            st.info("""
+            Upload satellite images for training. Images should:
+            - Be aerial/satellite views
+            - Include various urban areas with different vegetation/building ratios
+            - Be clear enough to distinguish vegetation and buildings
+            """)
+        else:
+            st.info("""
+            Upload images for training. Images should:
+            - Be relevant to each other and come from consistent data sources
+            - Represent various environments or categories based on the features you want to cluster
+            """)
+
+        # Unggah gambar latih untuk model
+        uploaded_train_files = st.file_uploader("Upload training images...", accept_multiple_files=True, type=["jpg", "jpeg", "png"])
+
+        # Tombol untuk memulai pelatihan model
+        if st.button('Train Model'):
+            train_model(n_clusters, uploaded_train_files)
+
+        st.subheader("Image Processing")
+        uploaded_file = st.file_uploader("Choose an image to process...", type=["jpg", "jpeg", "png"])
+
+        # Jika gambar diunggah, tampilkan gambar dan tombol untuk memproses
         if uploaded_file is not None:
             image = Image.open(uploaded_file)
             st.image(image, caption='Uploaded Image', use_column_width=True)
-
-        process_button = st.button('Perform Clustering', type="primary")
+            process_button = st.button('Process Image', type="primary")
 
     with col2:
-        # Jika gambar diunggah dan tombol ditekan, lakukan pemrosesan
         if uploaded_file is not None and process_button:
-            # Tampilkan animasi saat memproses
             with st.spinner("Processing image..."):
-                original_image = np.array(image)                            # Konversi gambar ke array NumPy
-                preprocessed_image = preprocess_image(original_image)       # Proses gambar
-                features = extract_features(preprocessed_image)             # Ekstrak fitur dari gambar yang diproses
+                # Muat model yang telah dilatih
+                kmeans = KMeans.load_model('models/kmeans_model.pkl')
 
-                # Inisialisasi KMeans dengan jumlah cluster yang dipilih
-                kmeans = KMeans(n_clusters=n_clusters)
-                
-                # Lakukan clustering pada fitur
-                labels = kmeans.fit_predict(features)
+                # Proses gambar dengan model
+                original_image = np.array(image)
+                preprocessed_image = preprocess_image(original_image)
+                features = extract_features(preprocessed_image)
 
-                segmented_image = labels.reshape(original_image.shape[:2])              # Ubah label menjadi citra tersegmentasi
-                cleaned_image = clean_small_regions(segmented_image, min_size=200)      # Bersihkan area kecil dari hasil segmentasi
+                # Lakukan klasterisasi
+                labels = kmeans.predict(features)
+                segmented_image = labels.reshape(original_image.shape[:2])
+                cleaned_image = clean_small_regions(segmented_image, min_size=200)
 
+                # Visualisasi hasil klasterisasi
                 st.subheader("Clustering Results")
-                fig1, avg_colors = visualize_results(original_image, cleaned_image)     # Visualisasikan hasil clustering
-                st.pyplot(fig1)                                                         
-
-                fig2 = visualize_cluster_info(cleaned_image, avg_colors)                # Visualisasikan informasi cluster
+                fig1, avg_colors = visualize_results(original_image, cleaned_image)
+                st.pyplot(fig1)
+                fig2 = visualize_cluster_info(cleaned_image, avg_colors)
                 st.pyplot(fig2)
                 
-                # Identifikasi label hijau dari hasil clustering
-                green_labels = [i for i, color in enumerate(avg_colors) if is_green(color) or is_dark_green(color)]
-                
-                # Hitung persentase area terbuka hijau
-                if green_labels:
-                    green_area_percentage = np.sum([np.sum(cleaned_image == label) for label in green_labels]) / cleaned_image.size * 100
-                else:
-                    green_area_percentage = 0.0
-                
-                # Identifikasi label non-hijau dan bangunan
-                non_green_labels = [i for i in range(n_clusters) if i not in green_labels and not is_water(avg_colors[i])]
-                building_labels = [i for i in non_green_labels if is_building(avg_colors[i])]
-                building_area_percentage = np.sum([np.sum(cleaned_image == label) for label in building_labels]) / cleaned_image.size * 100 if building_labels else 0.0
-                
-                st.markdown("---")
-                st.subheader("Area Analysis")
-                col_green, col_building = st.columns(2)
-                with col_green:
-                    st.metric("Green Area", f"{green_area_percentage:.2f}%")
-                    st.caption(f"From clusters: {[label + 1 for label in green_labels]}")
-                with col_building:
-                    st.metric("Building Area", f"{building_area_percentage:.2f}%")
-                    st.caption(f"From clusters: {[label + 1 for label in building_labels]}")
-                
-                st.markdown("---")
-                st.subheader("Livability Assessment")
-                
-                # Tentukan apakah area layak huni berdasarkan kriteria
-                is_livable = green_area_percentage >= 30 or (green_area_percentage < 30 and green_area_percentage > building_area_percentage)
-                        
-                if is_livable:
-                    st.success("This area is considered livable.")
-                    if green_area_percentage >= 30 and green_area_percentage > building_area_percentage:
-                        st.write("✅ Green area >= 30%")
-                        st.write("✅ Green area > Building area")
-                    elif green_area_percentage >= 30:
-                        st.write("✅ Green area >= 30%")
-                        st.write("ℹ️ Green area <= Building area")
+                # Analisis kelayakan huni jika mode yang dipilih
+                if option == "Clustering Kelayakan Huni Suatu Area":
+                    st.subheader("Area Analysis for Livability")
+                    green_labels = [i for i, color in enumerate(avg_colors) if is_green(color) or is_dark_green(color)]
+                    if green_labels:
+                        green_area_percentage = np.sum([np.sum(cleaned_image == label) for label in green_labels]) / cleaned_image.size * 100
                     else:
-                        st.write("ℹ️ Green area < 30%")
-                        st.write("✅ Green area > Building area")
-                else:
-                    st.error("This area is not considered livable.")
-                    st.write("❌ Green area < 30%")
-                    st.write("❌ Green area <= Building area")
+                        green_area_percentage = 0.0
 
-# MFungsi Utama
+                    non_green_labels = [i for i in range(n_clusters) if i not in green_labels]
+                    building_labels = [i for i in non_green_labels if is_building(avg_colors[i])]
+                    if building_labels:
+                        building_area_percentage = np.sum([np.sum(cleaned_image == label) for label in building_labels]) / cleaned_image.size * 100
+                    else:
+                        building_area_percentage = 0.0
+
+                    col_green, col_building = st.columns(2)
+                    with col_green:
+                        st.metric("Green Area", f"{green_area_percentage:.2f}%")
+                    with col_building:
+                        st.metric("Building Area", f"{building_area_percentage:.2f}%")
+
+                    # Penilaian kelayakan huni
+                    st.subheader("Livability Assessment")
+                    is_livable = green_area_percentage >= 30 or (green_area_percentage < 30 and green_area_percentage > building_area_percentage)
+
+                    if is_livable:
+                        st.success("This area is considered livable.")
+                    else:
+                        st.error("This area is not considered livable.")
+
+                else:
+                    # Ringkasan klasterisasi untuk opsi biasa
+                    st.subheader("Clustering Summary")
+                    st.write(f"Number of Clusters: {n_clusters}")
+                    st.write("Cluster analysis completed. For a more detailed analysis, choose the livability option.")
+
 if __name__ == "__main__":
     main()

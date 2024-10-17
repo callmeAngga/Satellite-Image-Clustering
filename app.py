@@ -10,6 +10,7 @@ from src.evaluation import evaluate_clustering
 
 # Fungsi untuk memeriksa apakah sebuah warna termasuk hijau
 def is_green(rgb_color):
+    # Mengonversi warna RGB ke HSV untuk deteksi warna yang lebih akurat
     hsv_color = cv2.cvtColor(np.uint8([[rgb_color]]), cv2.COLOR_RGB2HSV)[0][0]
     lower_green = np.array([30, 50, 50])
     upper_green = np.array([90, 255, 255])
@@ -17,12 +18,14 @@ def is_green(rgb_color):
 
 # Fungsi untuk memeriksa apakah sebuah warna termasuk hijau gelap
 def is_dark_green(rgb_color):
+    # Mengonversi warna RGB ke HSV dan memeriksa nilai-nilai spesifik untuk hijau gelap
     hsv_color = cv2.cvtColor(np.uint8([[rgb_color]]), cv2.COLOR_RGB2HSV)[0][0]
     return hsv_color[0] > 60 and hsv_color[1] > 40 and hsv_color[2] < 100
 
 # Fungsi untuk memeriksa apakah sebuah warna termasuk warna bangunan
 def is_building(rgb_color):
     r, g, b = rgb_color
+    # Memeriksa beberapa kondisi warna yang biasanya mewakili bangunan
     return (
         (r > 150 and g > 120 and b > 100) or
         (r == 208 and g == 143 and b == 118) or
@@ -94,14 +97,8 @@ def train_model(n_clusters, uploaded_images):
 
 # Fungsi utama aplikasi
 def main():
+    st.set_page_config(page_title="City Area Segmentation", layout="wide")
 
-    # Atur pengaturan halaman aplikasi
-    st.set_page_config(
-        page_title="City Area Segmentation",        # Set judul aplikasi
-        layout="wide"                               # Atur tata letak halamana menjadi lebar
-    )    
-    
-    # Tampilkan judul dan penjelasan aplikasi
     st.title('Image Segmentation with K-Means Clustering')
     
     # Dropdown untuk memilih mode klasterisasi
@@ -170,12 +167,14 @@ def main():
                 # Analisis kelayakan huni jika mode yang dipilih
                 if option == "Clustering Kelayakan Huni Suatu Area":
                     st.subheader("Area Analysis for Livability")
+                    # Identifikasi label klaster yang mewakili area hijau
                     green_labels = [i for i, color in enumerate(avg_colors) if is_green(color) or is_dark_green(color)]
                     if green_labels:
                         green_area_percentage = np.sum([np.sum(cleaned_image == label) for label in green_labels]) / cleaned_image.size * 100
                     else:
                         green_area_percentage = 0.0
 
+                    # Identifikasi label klaster yang mewakili bangunan
                     non_green_labels = [i for i in range(n_clusters) if i not in green_labels]
                     building_labels = [i for i in non_green_labels if is_building(avg_colors[i])]
                     if building_labels:
@@ -183,6 +182,7 @@ def main():
                     else:
                         building_area_percentage = 0.0
 
+                    # Tampilkan persentase area hijau dan bangunan
                     col_green, col_building = st.columns(2)
                     with col_green:
                         st.metric("Green Area", f"{green_area_percentage:.2f}%")

@@ -94,8 +94,14 @@ def train_model(n_clusters, uploaded_images):
 
 # Fungsi utama aplikasi
 def main():
-    st.set_page_config(page_title="City Area Segmentation", layout="wide")
 
+    # Atur pengaturan halaman aplikasi
+    st.set_page_config(
+        page_title="City Area Segmentation",        # Set judul aplikasi
+        layout="wide"                               # Atur tata letak halamana menjadi lebar
+    )    
+    
+    # Tampilkan judul dan penjelasan aplikasi
     st.title('Image Segmentation with K-Means Clustering')
     
     # Dropdown untuk memilih mode klasterisasi
